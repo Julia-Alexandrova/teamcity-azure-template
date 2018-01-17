@@ -1,0 +1,175 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "containerName": {
+      "type": "String"
+    },
+    "containerURI": {
+      "type": "String"
+    },
+    "imageRegistryLoginServer": {
+      "type": "String",
+      "defaultValue": ""
+    },
+    "imageUsername": {
+      "type": "String",
+      "defaultValue": ""
+    },
+    "imagePassword": {
+      "type": "secureString",
+      "defaultValue": ""
+    },
+    "osType": {
+      "allowedValues": [
+        "Linux",
+        "Windows"
+      ],
+      "type": "String"
+    },
+    "numberCores": {
+      "type": "String"
+    },
+    "memory": {
+      "type": "String"
+    },
+    "ports": {
+      "defaultValue": "80",
+      "type": "String"
+    }
+  },
+  "variables": {
+    "storageName": "teamcity-data",
+    "serverName": "teamcity-server"
+  },
+  "resources": [
+    {
+      "name": "teamcity-data",
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2016-12-01",
+      "location": "[resourceGroup().location]",
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "kind": "Storage"
+    },
+    {
+      "name": "variables('serverName')",
+      "type": "Microsoft.ContainerInstance/containerGroups",
+      "apiVersion": "2017-08-01-preview",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[concat('Microsoft.Storage/storageAccounts/',variables('storageName'))]"
+      ],
+      "properties": {
+        "containers": [
+          {
+            "name": "teamcity-server",
+            "properties": {
+              "image": "jetbrains/teamcity-server",
+              "resources": {
+                "requests": {
+                  "cpu": "2",
+                  "memoryInGb": "2"
+                }
+              },
+              "volumeMounts": [
+                {
+                  "name": "serverData",
+                  "mountPath": "/data/teamcity_server/datadir"
+                },
+                {
+                  "name": "serverLogs",
+                  "mountPath": "/opt/teamcity/logs"
+                }
+              ]
+            }
+          }
+        ],
+        "osType": "Linux",
+        "ipAddress": {
+          "type": "Public",
+          "ports": [
+            {
+              "protocol": "tcp",
+              "port": "8111"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "teamcity-agent",
+      "type": "Microsoft.ContainerInstance/containerGroups",
+      "apiVersion": "2017-08-01-preview",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[concat('Microsoft.Storage/storageAccounts/',variables('storageName'))]",
+        "[concat('Microsoft.ContainerInstance/containerGroups/',variables('serverName'))]"
+      ],
+      "properties": {
+        "containers": [
+          {
+            "name": "teamcity-agent",
+            "properties": {
+              "image": "jetbrains/teamcity-agent",
+              "resources": {
+                "requests": {
+                  "cpu": "2",
+                  "memoryInGb": "2"
+                }
+              },
+              "volumeMounts": [
+                {
+                  "name": "agentConfig",
+                  "mountPath": "/data/teamcity_agent/conf"
+                }
+              ],
+              "environmentVariables": [
+                {
+                  "name": "SERVER_URL",
+                  "value":"[concat('http://', reference(resourceId('Microsoft.ContainerInstance/containerGroups/', variables('serverName'))).ipAddress.ip)]"
+                }
+              ]
+            }
+          }
+        ],
+        "osType": "Linux"
+      }
+    }
+  ],
+  "properties": {
+    "volumes": [
+      {
+        "name": "serverData",
+        "azureFile": {
+          "shareName": "teamcity-server-data",
+          "storageAccountName": "[variables('storageName')]",
+          "storageAccountKey": "[listKeys(parameters('storageName'), '2016-12-01').keys[0].value]"
+        }
+      },
+      {
+        "name": "serverLogs",
+        "azureFile": {
+          "shareName": "teamcity-server-logs",
+          "storageAccountName": "[variables('storageName')]",
+          "storageAccountKey": "[listKeys(parameters('storageName'), '2016-12-01').keys[0].value]"
+        }
+      },
+      {
+        "name": "agentConfig",
+        "azureFile": {
+          "shareName": "teamcity-agent-config",
+          "storageAccountName": "[variables('storageName')]",
+          "storageAccountKey": "[listKeys(parameters('storageName'), '2016-12-01').keys[0].value]"
+        }
+      }
+    ]
+  },
+  "outputs": {
+    "containerIPv4Address": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ContainerInstance/containerGroups/', variables('serverName'))).ipAddress.ip]"
+    }
+  }
+}
