@@ -2,40 +2,30 @@
   "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
   "parameters": {
-    "containerName": {
-      "type": "String"
-    },
-    "containerURI": {
-      "type": "String"
-    },
-    "imageRegistryLoginServer": {
+    "teamcityVersion": {
       "type": "String",
-      "defaultValue": ""
-    },
-    "imageUsername": {
-      "type": "String",
-      "defaultValue": ""
-    },
-    "imagePassword": {
-      "type": "secureString",
-      "defaultValue": ""
+      "defaultValue": "latest",
+      "metadata": {
+        "description": "TeamCity docker image version"
+      }
     },
     "osType": {
       "allowedValues": [
         "Linux",
         "Windows"
       ],
-      "type": "String"
+      "defaultValue": "Linux",
+      "type": "String",
+      "metadata": {
+        "description": "OS version of docker image version"
+      }
     },
-    "numberCores": {
-      "type": "String"
-    },
-    "memory": {
-      "type": "String"
-    },
-    "ports": {
-      "defaultValue": "80",
-      "type": "String"
+    "environment": {
+      "defaultValue": "test",
+      "type": "String",
+      "metadata": {
+        "description": "TeamCity environment"
+      }
     }
   },
   "variables": {
@@ -86,7 +76,7 @@
             }
           }
         ],
-        "osType": "Linux",
+        "osType": "[parameters('osType')]",
         "ipAddress": {
           "type": "Public",
           "ports": [
@@ -134,7 +124,7 @@
             }
           }
         ],
-        "osType": "Linux"
+        "osType": "[parameters('osType')]"
       }
     }
   ],
