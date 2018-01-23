@@ -2,164 +2,169 @@
   "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
   "parameters": {
-    "teamcityVersion": {
-      "type": "String",
-      "defaultValue": "latest",
-      "metadata": {
-        "description": "TeamCity docker image version"
-      }
-    },
-    "osType": {
-      "allowedValues": [
-        "Linux",
-        "Windows"
-      ],
-      "defaultValue": "Linux",
-      "type": "String",
-      "metadata": {
-        "description": "OS version of docker image version"
-      }
-    },
-    "environment": {
+    "stackName": {
+      "type": "string",
       "defaultValue": "test",
-      "type": "String",
+      "minLength": 1,
       "metadata": {
-        "description": "TeamCity environment"
+        "description": "Name of TeamCity environment"
+      }
+    },
+    "vmSize": {
+      "type": "string",
+      "defaultValue": "Standard_A1",
+      "allowedValues": [
+        "Standard_A1",
+        "Standard_A2",
+        "Standard_A3",
+        "Standard_A4"
+      ],
+      "metadata": {
+        "description": "Instance size for the VMs"
+      }
+    },
+    "storageType": {
+      "type": "string",
+      "defaultValue": "Standard_LRS",
+      "allowedValues": [
+        "Standard_LRS",
+        "Premium_LRS"
+      ],
+      "metadata": {
+        "description": "Instance size for the VMs"
+      }
+    },
+    "adminUsername": {
+      "type": "string",
+      "defaultValue": "core",
+      "metadata": {
+        "description": "Username to login to the VMs"
+      }
+    },
+    "sshKeyData": {
+      "type": "secureString",
+      "metadata": {
+        "description": "Public key for SSH authentication"
       }
     }
   },
   "variables": {
-    "storageName": "teamcity-data",
-    "serverName": "teamcity-server"
+    "publicIpName": "[concat('teamcity-', parameters('stackName'), '-pip')]",
+    "virtualNetworkName": "[concat('teamcity-', parameters('stackName'), '-vnet')]",
+    "networkName": "[concat('teamcity-', parameters('stackName'), '-net')]",
+    "vmName": "[concat('teamcity-', parameters('stackName'))]",
+    "sshKeyPath": "[concat('/home/',parameters('adminUsername'),'/.ssh/authorized_keys')]",
+    "userData": ""
   },
   "resources": [
     {
-      "name": "teamcity-data",
-      "type": "Microsoft.Storage/storageAccounts",
-      "apiVersion": "2016-12-01",
+      "type": "Microsoft.Network/publicIPAddresses",
+      "name": "[concat('teamcity-', parameters('stackName'), '-ip')]",
       "location": "[resourceGroup().location]",
-      "sku": {
-        "name": "Standard_LRS"
-      },
-      "kind": "Storage"
+      "apiVersion": "2017-08-01",
+      "properties": {
+        "publicIPAllocationMethod": "Dynamic"
+      }
     },
     {
-      "name": "variables('serverName')",
-      "type": "Microsoft.ContainerInstance/containerGroups",
-      "apiVersion": "2017-08-01-preview",
+      "type": "Microsoft.Network/virtualNetworks",
+      "name": "[variables('virtualNetworkName')]",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2017-08-01",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "10.0.0.0/24"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "default",
+            "properties": {
+              "addressPrefix": "10.0.0.0/24"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkInterfaces",
+      "name": "[variables('networkName')]",
       "location": "[resourceGroup().location]",
       "dependsOn": [
-        "[concat('Microsoft.Storage/storageAccounts/',variables('storageName'))]"
+        "[concat('Microsoft.Network/publicIPAddresses/', variables('publicIpName'))]",
+        "[concat('Microsoft.Network/virtualNetworks/', variables('virtualNetworkName'))]"
       ],
+      "apiVersion": "2016-09-01",
       "properties": {
-        "containers": [
+        "ipConfigurations": [
           {
-            "name": "teamcity-server",
+            "name": "[concat(variables('vmName'), '-config')]",
             "properties": {
-              "image": "jetbrains/teamcity-server",
-              "resources": {
-                "requests": {
-                  "cpu": "2",
-                  "memoryInGb": "2"
-                }
+              "privateIPAllocationMethod": "Dynamic",
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIpAddresses', variables('publicIpName')))]"
               },
-              "volumeMounts": [
+              "subnet": {
+                "id": "default"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines",
+      "name": "[variables('vmName')]",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[concat('Microsoft.Network/networkInterfaces/', variables('networkName'))]"
+      ],
+      "apiVersion": "2016-04-30-preview",
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "[parameters('vmSize')]"
+        },
+        "osProfile": {
+          "computerName": "[variables('vmName')]",
+          "adminUsername": "[parameters('adminUsername')]",
+          "customData": "[base64(variables('userData'))]",
+          "linuxConfiguration": {
+            "disablePasswordAuthentication": true,
+            "ssh": {
+              "publicKeys": [
                 {
-                  "name": "serverData",
-                  "mountPath": "/data/teamcity_server/datadir"
-                },
-                {
-                  "name": "serverLogs",
-                  "mountPath": "/opt/teamcity/logs"
+                  "path": "[variables('sshKeyPath')]",
+                  "keyData": "[parameters('sshKeyData')]"
                 }
               ]
             }
           }
-        ],
-        "osType": "[parameters('osType')]",
-        "ipAddress": {
-          "type": "Public",
-          "ports": [
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "CoreOS",
+            "offer": "CoreOS",
+            "sku": "Stable",
+            "version": "latest"
+          },
+          "osDisk": {
+            "name": "[concat(variables('vmName'), '-os')]",
+            "managedDisk": {
+              "storageAccountType": "[parameters('storageType')]"
+            },
+            "caching": "ReadWrite",
+            "createOption": "FromImage"
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
             {
-              "protocol": "tcp",
-              "port": "8111"
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('networkName'))]"
             }
           ]
         }
       }
-    },
-    {
-      "name": "teamcity-agent",
-      "type": "Microsoft.ContainerInstance/containerGroups",
-      "apiVersion": "2017-08-01-preview",
-      "location": "[resourceGroup().location]",
-      "dependsOn": [
-        "[concat('Microsoft.Storage/storageAccounts/',variables('storageName'))]",
-        "[concat('Microsoft.ContainerInstance/containerGroups/',variables('serverName'))]"
-      ],
-      "properties": {
-        "containers": [
-          {
-            "name": "teamcity-agent",
-            "properties": {
-              "image": "jetbrains/teamcity-agent",
-              "resources": {
-                "requests": {
-                  "cpu": "2",
-                  "memoryInGb": "2"
-                }
-              },
-              "volumeMounts": [
-                {
-                  "name": "agentConfig",
-                  "mountPath": "/data/teamcity_agent/conf"
-                }
-              ],
-              "environmentVariables": [
-                {
-                  "name": "SERVER_URL",
-                  "value":"[concat('http://', reference(resourceId('Microsoft.ContainerInstance/containerGroups/', variables('serverName'))).ipAddress.ip)]"
-                }
-              ]
-            }
-          }
-        ],
-        "osType": "[parameters('osType')]"
-      }
     }
-  ],
-  "properties": {
-    "volumes": [
-      {
-        "name": "serverData",
-        "azureFile": {
-          "shareName": "teamcity-server-data",
-          "storageAccountName": "[variables('storageName')]",
-          "storageAccountKey": "[listKeys(parameters('storageName'), '2016-12-01').keys[0].value]"
-        }
-      },
-      {
-        "name": "serverLogs",
-        "azureFile": {
-          "shareName": "teamcity-server-logs",
-          "storageAccountName": "[variables('storageName')]",
-          "storageAccountKey": "[listKeys(parameters('storageName'), '2016-12-01').keys[0].value]"
-        }
-      },
-      {
-        "name": "agentConfig",
-        "azureFile": {
-          "shareName": "teamcity-agent-config",
-          "storageAccountName": "[variables('storageName')]",
-          "storageAccountKey": "[listKeys(parameters('storageName'), '2016-12-01').keys[0].value]"
-        }
-      }
-    ]
-  },
-  "outputs": {
-    "containerIPv4Address": {
-      "type": "string",
-      "value": "[reference(resourceId('Microsoft.ContainerInstance/containerGroups/', variables('serverName'))).ipAddress.ip]"
-    }
-  }
+  ]
 }
