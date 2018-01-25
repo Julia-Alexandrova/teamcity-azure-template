@@ -2,25 +2,41 @@
   "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
   "parameters": {
-    "stackName": {
+    "environment": {
       "type": "string",
       "defaultValue": "test",
       "minLength": 1,
       "metadata": {
-        "description": "Name of TeamCity environment"
+        "description": "The name of TeamCity environment"
+      }
+    },
+    "teamcityVersion": {
+      "type": "string",
+      "defaultValue": "latest",
+      "minLength": 1,
+      "metadata": {
+        "description": "The version of TeamCity linux docker images"
       }
     },
     "vmSize": {
       "type": "string",
-      "defaultValue": "Standard_A1",
+      "defaultValue": "Standard_D1_v2",
       "allowedValues": [
         "Standard_A1",
         "Standard_A2",
         "Standard_A3",
-        "Standard_A4"
+        "Standard_A4",
+        "Standard_A1_v2",
+        "Standard_A2_v2",
+        "Standard_A4_v2",
+        "Standard_D1_v2",
+        "Standard_D2_v2",
+        "Standard_D2_v3",
+        "Standard_D3_v2",
+        "Standard_D4_v3"
       ],
       "metadata": {
-        "description": "Instance size for the VMs"
+        "description": "Instance size for the TeamCity VM"
       }
     },
     "storageType": {
@@ -31,7 +47,7 @@
         "Premium_LRS"
       ],
       "metadata": {
-        "description": "Instance size for the VMs"
+        "description": "Storage type for the TeamCity VM"
       }
     },
     "adminUsername": {
@@ -46,24 +62,74 @@
       "metadata": {
         "description": "Public key for SSH authentication"
       }
+    },
+    "databasePassword": {
+      "type": "secureString",
+      "minLength": 8,
+      "maxLength": 128,
+      "metadata": {
+        "description": "Database administrator password"
+      }
+    },
+    "databaseSkuName": {
+      "type": "string",
+      "allowedValues": [
+        "MYSQLB50",
+        "MYSQLB100"
+      ],
+      "defaultValue": "MYSQLB50",
+      "metadata": {
+        "description": "Azure database for MySQL sku name: MySQL Basic 50 DTU or 100 DTU"
+      }
+    },
+    "databaseDTU": {
+      "type": "int",
+      "allowedValues": [
+        50,
+        100
+      ],
+      "defaultValue": 50,
+      "metadata": {
+        "description": "Azure database for MySQL pricing tier"
+      }
+    },
+    "databaseSizeMB": {
+      "type": "int",
+      "allowedValues": [
+        51200,
+        102400
+      ],
+      "defaultValue": 51200,
+      "metadata": {
+        "description": "Azure database for MySQL Sku Size"
+      }
     }
   },
   "variables": {
-    "publicIpName": "[concat('teamcity-', parameters('stackName'), '-pip')]",
-    "virtualNetworkName": "[concat('teamcity-', parameters('stackName'), '-vnet')]",
-    "networkName": "[concat('teamcity-', parameters('stackName'), '-net')]",
-    "vmName": "[concat('teamcity-', parameters('stackName'))]",
+    "publicIpName": "[concat('teamcity-', parameters('environment'), '-pip')]",
+    "publicIpDns": "[concat('teamcity-', uniqueString(resourceGroup().id, parameters('environment')))]",
+    "virtualNetworkName": "[concat('teamcity-', parameters('environment'), '-vnet')]",
+    "networkName": "[concat('teamcity-', parameters('environment'), '-net')]",
+    "networkSubnet": "[concat(resourceId('Microsoft.Network/virtualNetworks', variables('virtualNetworkName')), '/subnets/default')]",
+    "networkSecurityGroupName": "[concat('teamcity-', parameters('environment'), '-nsg')]",
+    "vmName": "[concat('teamcity-', parameters('environment'))]",
     "sshKeyPath": "[concat('/home/',parameters('adminUsername'),'/.ssh/authorized_keys')]",
-    "userData": ""
+    "dbServerName": "[concat('teamcity-', parameters('environment'), '-', uniqueString(resourceGroup().id, parameters('environment')))]",
+    "dbName": "teamcitydb",
+    "storageAccountName": "[concat('teamcity', uniqueString(resourceGroup().id))]",
+    "storageFileShare": "[concat('teamcity-', parameters('environment'))]"
   },
   "resources": [
     {
       "type": "Microsoft.Network/publicIPAddresses",
-      "name": "[concat('teamcity-', parameters('stackName'), '-ip')]",
+      "name": "[variables('publicIpName')]",
       "location": "[resourceGroup().location]",
       "apiVersion": "2017-08-01",
       "properties": {
-        "publicIPAllocationMethod": "Dynamic"
+        "publicIPAllocationMethod": "Dynamic",
+        "dnsSettings": {
+          "domainNameLabel": "[variables('publicIpDns')]"
+        }
       }
     },
     {
@@ -88,12 +154,49 @@
       }
     },
     {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "name": "[variables('networkSecurityGroupName')]",
+      "apiVersion": "2017-06-01",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "default-allow-ssh",
+            "properties": {
+              "priority": 1000,
+              "protocol": "TCP",
+              "access": "Allow",
+              "direction": "Inbound",
+              "sourceAddressPrefix": "*",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "22"
+            }
+          },
+          {
+            "name": "default-allow-http",
+            "properties": {
+              "priority": 1010,
+              "protocol": "TCP",
+              "access": "Allow",
+              "direction": "Inbound",
+              "sourceAddressPrefix": "*",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "80"
+            }
+          }
+        ]
+      }
+    },
+    {
       "type": "Microsoft.Network/networkInterfaces",
       "name": "[variables('networkName')]",
       "location": "[resourceGroup().location]",
       "dependsOn": [
         "[concat('Microsoft.Network/publicIPAddresses/', variables('publicIpName'))]",
-        "[concat('Microsoft.Network/virtualNetworks/', variables('virtualNetworkName'))]"
+        "[concat('Microsoft.Network/virtualNetworks/', variables('virtualNetworkName'))]",
+        "[concat('Microsoft.Network/networkSecurityGroups/', variables('networkSecurityGroupName'))]"
       ],
       "apiVersion": "2016-09-01",
       "properties": {
@@ -103,14 +206,89 @@
             "properties": {
               "privateIPAllocationMethod": "Dynamic",
               "publicIPAddress": {
-                "id": "[resourceId('Microsoft.Network/publicIpAddresses', variables('publicIpName')))]"
+                "id": "[resourceId('Microsoft.Network/publicIpAddresses', variables('publicIpName'))]"
               },
               "subnet": {
-                "id": "default"
+                "id": "[variables('networkSubnet')]"
               }
             }
           }
-        ]
+        ],
+        "networkSecurityGroup": {
+          "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('networkSecurityGroupName'))]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.DBforMySQL/servers",
+      "name": "[variables('dbServerName')]",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2017-04-30-preview",
+      "properties": {
+        "version": "5.6",
+        "administratorLogin": "teamcity",
+        "administratorLoginPassword": "[parameters('databasePassword')]",
+        "storageMB": "[parameters('databaseSizeMB')]",
+        "sslEnforcement": "Disabled"
+      },
+      "sku": {
+        "name": "[parameters('databaseSkuName')]",
+        "tier": "Basic",
+        "capacity": "[parameters('databaseDTU')]",
+        "size": "[parameters('databaseSizeMB')]",
+        "family": "SkuFamily"
+      },
+      "resources": [
+        {
+          "type": "firewallrules",
+          "apiVersion": "2017-04-30-preview",
+          "dependsOn": [
+            "[concat('Microsoft.DBforMySQL/servers/', variables('dbServerName'))]"
+          ],
+          "location": "[resourceGroup().location]",
+          "name": "firewall",
+          "properties": {
+            "startIpAddress": "0.0.0.0",
+            "endIpAddress": "0.0.0.0"
+          }
+        },
+        {
+          "type": "databases",
+          "name": "[variables('dbName')]",
+          "apiVersion": "2017-04-30-preview",
+          "properties": {
+            "charset": "utf8",
+            "collation": "utf8_general_ci"
+          },
+          "dependsOn": [
+            "[concat('Microsoft.DBforMySQL/servers/', variables('dbServerName'))]"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "sku": {
+        "name": "[parameters('storageType')]"
+      },
+      "kind": "StorageV2",
+      "name": "[variables('storageAccountName')]",
+      "apiVersion": "2017-10-01",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "supportsHttpsTrafficOnly": "false",
+        "accessTier": "Hot",
+        "encryption": {
+          "services": {
+            "blob": {
+              "enabled": true
+            },
+            "file": {
+              "enabled": true
+            }
+          },
+          "keySource": "Microsoft.Storage"
+        }
       }
     },
     {
@@ -118,7 +296,9 @@
       "name": "[variables('vmName')]",
       "location": "[resourceGroup().location]",
       "dependsOn": [
-        "[concat('Microsoft.Network/networkInterfaces/', variables('networkName'))]"
+        "[concat('Microsoft.Storage/storageAccounts/', variables('storageAccountName'))]",
+        "[concat('Microsoft.Network/networkInterfaces/', variables('networkName'))]",
+        "[concat('Microsoft.DBforMySQL/servers/', variables('dbServerName'))]"
       ],
       "apiVersion": "2016-04-30-preview",
       "properties": {
@@ -128,7 +308,7 @@
         "osProfile": {
           "computerName": "[variables('vmName')]",
           "adminUsername": "[parameters('adminUsername')]",
-          "customData": "[base64(variables('userData'))]",
+          "customData": "[base64(concat('#cloud-config\nwrite_files:\n  - path: \"/etc/teamcity-version\"\n    content: |\n      TEAMCITY_VERSION=',parameters('teamcityVersion'),'\n  - path: \"/etc/coreos/update.conf\"\n    content: |\n      REBOOT_STRATEGY=\"off\"\ncoreos:\n  units:\n    - name: \"install-cifs.service\"\n      enable: true\n      content: |\n        [Unit]\n        Description=Download basic mount.cifs binary\n        After=docker.service network.target\n        Requires=docker.service\n        Before=teamcity-server.service mnt-data.service\n        ConditionFileIsExecutable=!/opt/bin/mount.cifs\n\n        [Service]\n        Type=oneshot\n        TimeoutStartSec=0\n        ExecStart=/usr/bin/mkdir -p /opt/bin\n        ExecStart=/usr/bin/docker run --rm -v /opt/bin:/target so0k/mount.cifs_copy:6.4 /target\n        ExecStart=/usr/bin/docker run --rm microsoft/azure-cli az storage share create -n ',variables('storageFileShare'),' \\\n          --account-name ',variables('storageAccountName'),' --account-key ',listKeys(variables('storageAccountName'), '2017-10-01').keys[0].value,'\n        ExecStart=/usr/bin/docker rmi so0k/mount.cifs_copy:6.4\n        ExecStart=/usr/bin/docker rmi microsoft/azure-cli\n\n        [Install]\n        WantedBy=multi-user.target\n    - name: \"mnt-data.service\"\n      enable: true\n      content: |\n        [Unit]\n        Before=teamcity-server.service\n        After=install-cifs.service\n        Requires=network-online.target install-cifs.service\n        Conflicts=umount.target\n\n        [Service]\n        Type=oneshot\n        TimeoutStartSec=0\n        RemainAfterExit=yes\n        ExecStart=/usr/bin/mkdir -p /mnt/data\n        ExecStart=/opt/bin/mount.cifs //',variables('storageAccountName'),'.file.core.windows.net/',variables('storageFileShare'),' /mnt/data \\\n          -o vers=2.1,user=',variables('storageAccountName'),',pass=',listKeys(variables('storageAccountName'), '2017-10-01').keys[0].value,',dir_mode=0777,file_mode=0777,sec=ntlmssp\n\n        [Install]\n        RequiredBy=teamcity-server.service\n    - name: \"get-mysql-connector.service\"\n      enable: true\n      content: |\n        [Unit]\n        Before=teamcity-server.service\n        After=mnt-data.service\n        Requires=mnt-data.service\n        ConditionPathExists=!/mnt/data/teamcity/lib/jdbc/mysql-connector-java-bin.jar\n\n        [Service]\n        Type=oneshot\n        ExecStart=/usr/bin/mkdir -p /mnt/data/teamcity/lib/jdbc\n        ExecStart=/usr/bin/wget -O /mnt/data/teamcity/lib/jdbc/mysql-connector-java-bin.jar \\\n          http://central.maven.org/maven2/mysql/mysql-connector-java/5.1.43/mysql-connector-java-5.1.43.jar\n\n        [Install]\n        WantedBy=multi-user.target\n    - name: \"prepare-db-properties.service\"\n      enable: true\n      content: |\n        [Unit]\n        Before=teamcity-server.service\n        After=mnt-data.service\n        Requires=mnt-data.service network-online.target\n        ConditionPathExists=!/mnt/data/teamcity/config/database.properties\n\n        [Service]\n        Type=oneshot\n        ExecStart=/usr/bin/mkdir -p /mnt/data/teamcity/config\n        ExecStart=/bin/bash -c ''echo connectionProperties.user=teamcity@',variables('dbServerName'),' > /mnt/data/teamcity/config/database.properties''\n        ExecStart=/bin/bash -c ''echo connectionProperties.password=',parameters('databasePassword'),' >> /mnt/data/teamcity/config/database.properties''\n        ExecStart=/bin/bash -c ''echo connectionUrl=jdbc\\\\:mysql\\\\://',variables('dbServerName'),'.mysql.database.azure.com/',variables('dbName'),' >> /mnt/data/teamcity/config/database.properties''\n\n        [Install]\n        WantedBy=multi-user.target\n    - name: \"teamcity-server.service\"\n      command: \"start\"\n      content: |\n        [Unit]\n        Description=TeamCity Server\n        After=docker.service mnt-data.service get-mysql-connector.service prepare-db-properties.service\n        Requires=docker.service mnt-data.service get-mysql-connector.service prepare-db-properties.service\n\n        [Service]\n        EnvironmentFile=/etc/teamcity-version\n        TimeoutStartSec=1200s\n        ExecStartPre=/bin/sh -c \"docker images --filter ''before=jetbrains/teamcity-server:${TEAMCITY_VERSION}'' --format ''{{.ID}} {{.Repository}}'' | grep ''jetbrains/teamcity-server'' | grep -Eo ''^[^ ]+'' | xargs -r docker rmi\"\n        ExecStart=/usr/bin/docker run \\\n          -v /mnt/data/teamcity:/data/teamcity_server/datadir \\\n          -v /mnt/data/logs/teamcity:/opt/teamcity/logs \\\n          -v /mnt/data/temp/teamcity:/opt/teamcity/temp \\\n          -p 80:8111 \\\n          --name teamcity-server \\\n          jetbrains/teamcity-server:${TEAMCITY_VERSION}\n        ExecStop=-/usr/bin/docker exec teamcity-server /opt/teamcity/bin/teamcity-server.sh stop 60\n        ExecStopPost=-/usr/bin/docker stop teamcity-server\n        ExecStopPost=-/usr/bin/docker rm teamcity-server\n        Restart=always\n\n        [Install]\n        WantedBy=multi-user.target\n    - name: \"teamcity-agent.service\"\n      command: \"start\"\n      content: |\n        [Unit]\n        Description=TeamCity Agent\n        After=teamcity-server.service coreos-metadata.service\n        Requires=teamcity-server.service coreos-metadata.service\n\n        [Service]\n        EnvironmentFile=/etc/teamcity-version\n        TimeoutStartSec=1200s\n        EnvironmentFile=/run/metadata/coreos\n        ExecStartPre=/bin/sh -c \"docker images --filter ''before=jetbrains/teamcity-agent:${TEAMCITY_VERSION}'' --format ''{{.ID}} {{.Repository}}'' | grep ''jetbrains/teamcity-agent'' | grep -Eo ''^[^ ]+'' | xargs -r docker rmi\"\n        ExecStart=/usr/bin/docker run \\\n          -v /mnt/data/temp/teamcity:/opt/teamcity/temp \\\n          -e SERVER_URL=${COREOS_AZURE_IPV4_DYNAMIC} \\\n          -e AGENT_NAME=Default \\\n          --name teamcity-agent \\\n          jetbrains/teamcity-agent:${TEAMCITY_VERSION}\n        ExecStop=-/usr/bin/docker stop teamcity-agent\n        ExecStopPost=-/usr/bin/docker rm teamcity-agent\n        Restart=always\n\n        [Install]\n        WantedBy=multi-user.target'))]",
           "linuxConfiguration": {
             "disablePasswordAuthentication": true,
             "ssh": {
@@ -150,8 +330,8 @@
           },
           "osDisk": {
             "name": "[concat(variables('vmName'), '-os')]",
-            "managedDisk": {
-              "storageAccountType": "[parameters('storageType')]"
+            "vhd": {
+              "uri": "[concat('https://', variables('storageAccountName'), '.blob.core.windows.net/vhds/', variables('vmName'), '-os.vhd')]"
             },
             "caching": "ReadWrite",
             "createOption": "FromImage"
@@ -166,5 +346,15 @@
         }
       }
     }
-  ]
+  ],
+  "outputs": {
+    "teamcityURL": {
+      "type": "string",
+      "value": "[concat('http://', reference(variables('publicIpName')).dnsSettings.fqdn)]"
+    },
+    "SSH": {
+      "type": "string",
+      "value": "[concat('ssh ', parameters('adminUsername'), '@', reference(variables('publicIpName')).dnsSettings.fqdn)]"
+    }
+  }
 }

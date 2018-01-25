@@ -1,0 +1,137 @@
+#cloud-config
+write_files:
+  - path: "/etc/teamcity-version"
+    content: |
+      TEAMCITY_VERSION=%TeamCityVersion%
+  - path: "/etc/coreos/update.conf"
+    content: |
+      REBOOT_STRATEGY="off"
+coreos:
+  units:
+    - name: "install-cifs.service"
+      enable: true
+      content: |
+        [Unit]
+        Description=Download basic mount.cifs binary
+        After=docker.service network.target
+        Requires=docker.service
+        Before=teamcity-server.service mnt-data.service
+        ConditionFileIsExecutable=!/opt/bin/mount.cifs
+
+        [Service]
+        Type=oneshot
+        TimeoutStartSec=0
+        ExecStart=/usr/bin/mkdir -p /opt/bin
+        ExecStart=/usr/bin/docker run --rm -v /opt/bin:/target so0k/mount.cifs_copy:6.4 /target
+        ExecStart=/usr/bin/docker run --rm microsoft/azure-cli az storage share create -n %FileShare% \
+          --account-name %StorageAccount% --account-key %StorageKey%
+        ExecStart=/usr/bin/docker rmi so0k/mount.cifs_copy:6.4
+        ExecStart=/usr/bin/docker rmi microsoft/azure-cli
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: "mnt-data.service"
+      enable: true
+      content: |
+        [Unit]
+        Before=teamcity-server.service
+        After=install-cifs.service
+        Requires=network-online.target install-cifs.service
+        Conflicts=umount.target
+
+        [Service]
+        Type=oneshot
+        TimeoutStartSec=0
+        RemainAfterExit=yes
+        ExecStart=/usr/bin/mkdir -p /mnt/data
+        ExecStart=/opt/bin/mount.cifs //%StorageAccount%.file.core.windows.net/%FileShare% /mnt/data \
+          -o vers=2.1,user=%StorageAccount%,pass=%StorageKey%,dir_mode=0777,file_mode=0777,sec=ntlmssp
+
+        [Install]
+        RequiredBy=teamcity-server.service
+    - name: "get-mysql-connector.service"
+      enable: true
+      content: |
+        [Unit]
+        Before=teamcity-server.service
+        After=mnt-data.service
+        Requires=mnt-data.service
+        ConditionPathExists=!/mnt/data/teamcity/lib/jdbc/mysql-connector-java-bin.jar
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/bin/mkdir -p /mnt/data/teamcity/lib/jdbc
+        ExecStart=/usr/bin/wget -O /mnt/data/teamcity/lib/jdbc/mysql-connector-java-bin.jar \
+          http://central.maven.org/maven2/mysql/mysql-connector-java/5.1.43/mysql-connector-java-5.1.43.jar
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: "prepare-db-properties.service"
+      enable: true
+      content: |
+        [Unit]
+        Before=teamcity-server.service
+        After=mnt-data.service
+        Requires=mnt-data.service network-online.target
+        ConditionPathExists=!/mnt/data/teamcity/config/database.properties
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/bin/mkdir -p /mnt/data/teamcity/config
+        ExecStart=/bin/bash -c 'echo connectionProperties.user=teamcity@%RDSHost% > /mnt/data/teamcity/config/database.properties'
+        ExecStart=/bin/bash -c 'echo connectionProperties.password=%RDSPassword% >> /mnt/data/teamcity/config/database.properties'
+        ExecStart=/bin/bash -c 'echo connectionUrl=jdbc\\:mysql\\://%RDSHost%.mysql.database.azure.com/%RDSDataBase% >> /mnt/data/teamcity/config/database.properties'
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: "teamcity-server.service"
+      command: "start"
+      content: |
+        [Unit]
+        Description=TeamCity Server
+        After=docker.service mnt-data.service get-mysql-connector.service prepare-db-properties.service
+        Requires=docker.service mnt-data.service get-mysql-connector.service prepare-db-properties.service
+
+        [Service]
+        EnvironmentFile=/etc/teamcity-version
+        TimeoutStartSec=1200s
+        ExecStartPre=/bin/sh -c "docker images --filter 'before=jetbrains/teamcity-server:${TEAMCITY_VERSION}' --format '{{.ID}} {{.Repository}}' | grep 'jetbrains/teamcity-server' | grep -Eo '^[^ ]+' | xargs -r docker rmi"
+        ExecStart=/usr/bin/docker run \
+          -v /mnt/data/teamcity:/data/teamcity_server/datadir \
+          -v /mnt/data/logs/teamcity:/opt/teamcity/logs \
+          -v /mnt/data/temp/teamcity:/opt/teamcity/temp \
+          -p 80:8111 \
+          --name teamcity-server \
+          jetbrains/teamcity-server:${TEAMCITY_VERSION}
+        ExecStop=-/usr/bin/docker exec teamcity-server /opt/teamcity/bin/teamcity-server.sh stop 60
+        ExecStopPost=-/usr/bin/docker stop teamcity-server
+        ExecStopPost=-/usr/bin/docker rm teamcity-server
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: "teamcity-agent.service"
+      command: "start"
+      content: |
+        [Unit]
+        Description=TeamCity Agent
+        After=teamcity-server.service coreos-metadata.service
+        Requires=teamcity-server.service coreos-metadata.service
+
+        [Service]
+        EnvironmentFile=/etc/teamcity-version
+        TimeoutStartSec=1200s
+        EnvironmentFile=/run/metadata/coreos
+        ExecStartPre=/bin/sh -c "docker images --filter 'before=jetbrains/teamcity-agent:${TEAMCITY_VERSION}' --format '{{.ID}} {{.Repository}}' | grep 'jetbrains/teamcity-agent' | grep -Eo '^[^ ]+' | xargs -r docker rmi"
+        ExecStart=/usr/bin/docker run \
+          -v /mnt/data/temp/teamcity:/opt/teamcity/temp \
+          -e SERVER_URL=${COREOS_AZURE_IPV4_DYNAMIC} \
+          -e AGENT_NAME=Default \
+          --name teamcity-agent \
+          jetbrains/teamcity-agent:${TEAMCITY_VERSION}
+        ExecStop=-/usr/bin/docker stop teamcity-agent
+        ExecStopPost=-/usr/bin/docker rm teamcity-agent
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
