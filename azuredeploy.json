@@ -297,8 +297,7 @@
       "location": "[resourceGroup().location]",
       "dependsOn": [
         "[concat('Microsoft.Storage/storageAccounts/', variables('storageAccountName'))]",
-        "[concat('Microsoft.Network/networkInterfaces/', variables('networkName'))]",
-        "[concat('Microsoft.DBforMySQL/servers/', variables('dbServerName'))]"
+        "[concat('Microsoft.Network/networkInterfaces/', variables('networkName'))]"
       ],
       "apiVersion": "2016-04-30-preview",
       "properties": {
