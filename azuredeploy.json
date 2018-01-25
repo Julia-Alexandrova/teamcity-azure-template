@@ -20,28 +20,14 @@
     },
     "vmSize": {
       "type": "string",
-      "defaultValue": "Standard_D1_v2",
-      "allowedValues": [
-        "Standard_A1",
-        "Standard_A2",
-        "Standard_A3",
-        "Standard_A4",
-        "Standard_A1_v2",
-        "Standard_A2_v2",
-        "Standard_A4_v2",
-        "Standard_D1_v2",
-        "Standard_D2_v2",
-        "Standard_D2_v3",
-        "Standard_D3_v2",
-        "Standard_D4_v3"
-      ],
+      "defaultValue": "Standard_D2s_v3",
       "metadata": {
         "description": "Instance size for the TeamCity VM"
       }
     },
     "storageType": {
       "type": "string",
-      "defaultValue": "Standard_LRS",
+      "defaultValue": "Premium_LRS",
       "allowedValues": [
         "Standard_LRS",
         "Premium_LRS"
