@@ -233,7 +233,7 @@
         "sslEnforcement": "Disabled"
       },
       "sku": {
-        "name": "[cancat('MYSQL', substring(parameters('databaseTier'), 0, 1), parameters('databaseDTU'))]",
+        "name": "[concat('MYSQL', substring(parameters('databaseTier'), 0, 1), parameters('databaseDTU'))]",
         "tier": "[parameters('databaseTier')]",
         "capacity": "[parameters('databaseDTU')]",
         "size": "[parameters('databaseSizeMB')]",
