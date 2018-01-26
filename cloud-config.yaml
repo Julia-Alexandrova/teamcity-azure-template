@@ -1,8 +1,27 @@
 #cloud-config
 write_files:
-  - path: "/etc/teamcity-version"
+  - path: "/etc/teamcity/update.sh"
+    permissions: 0755
     content: |
-      TEAMCITY_VERSION=%TeamCityVersion%
+      #!/bin/bash
+      while true
+      do
+        STATUS=$(curl -s -o /etc/teamcity/tags -w '%{http_code}' -H Metadata:true "http://169.254.169.254/metadata/instance/compute/tags?api-version=2017-08-01&format=text")
+        if [ $STATUS -eq 200 ]; then
+          VERSION=$(cat /etc/teamcity/tags | sed -n 's/.*teamcity-version\:\([^;]\+\).*/\1/p')
+          if [[ ! -z "$VERSION" ]]; then
+            TEAMCITY_VERSION="TEAMCITY_VERSION=$VERSION"
+            CURRENT_VERSION=$(cat /etc/teamcity/version)
+            if [ "$TEAMCITY_VERSION" != "$CURRENT_VERSION" ]; then
+                echo "TeamCity version has changed to $VERSION"
+                echo "$TEAMCITY_VERSION" > /etc/teamcity/version
+                systemctl restart teamcity-server.service
+                systemctl restart teamcity-agent.service
+            fi
+          fi
+        fi
+        sleep 60
+      done
   - path: "/etc/coreos/update.conf"
     content: |
       REBOOT_STRATEGY="off"
@@ -80,7 +99,20 @@ coreos:
         ExecStart=/usr/bin/mkdir -p /mnt/data/teamcity/config
         ExecStart=/bin/bash -c 'echo connectionProperties.user=teamcity@%RDSHost% > /mnt/data/teamcity/config/database.properties'
         ExecStart=/bin/bash -c 'echo connectionProperties.password=%RDSPassword% >> /mnt/data/teamcity/config/database.properties'
-        ExecStart=/bin/bash -c 'echo connectionUrl=jdbc\\:mysql\\://%RDSHost%.mysql.database.azure.com/%RDSDataBase% >> /mnt/data/teamcity/config/database.properties'
+        ExecStart=/bin/bash -c 'echo connectionUrl=jdbc\\:mysql\\://%RDSHost%.mysql.database.azure.com/%RDSDataBase%?autoReconnect=true >> /mnt/data/teamcity/config/database.properties'
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: "teamcity-update.service"
+      command: "start"
+      content: |
+        [Unit]
+        Before=teamcity-server.service teamcity-agent.service
+        Requires=network-online.target
+
+        [Service]
+        ExecStart=+/bin/sh /etc/teamcity/update.sh
+        Restart=always
 
         [Install]
         WantedBy=multi-user.target
@@ -89,11 +121,11 @@ coreos:
       content: |
         [Unit]
         Description=TeamCity Server
-        After=docker.service mnt-data.service get-mysql-connector.service prepare-db-properties.service
-        Requires=docker.service mnt-data.service get-mysql-connector.service prepare-db-properties.service
+        After=docker.service mnt-data.service get-mysql-connector.service prepare-db-properties.service teamcity-update.service
+        Requires=docker.service mnt-data.service get-mysql-connector.service prepare-db-properties.service teamcity-update.service
 
         [Service]
-        EnvironmentFile=/etc/teamcity-version
+        EnvironmentFile=/etc/teamcity/version
         TimeoutStartSec=1200s
         ExecStartPre=/bin/sh -c "docker images --filter 'before=jetbrains/teamcity-server:${TEAMCITY_VERSION}' --format '{{.ID}} {{.Repository}}' | grep 'jetbrains/teamcity-server' | grep -Eo '^[^ ]+' | xargs -r docker rmi"
         ExecStart=/usr/bin/docker run \
@@ -115,11 +147,11 @@ coreos:
       content: |
         [Unit]
         Description=TeamCity Agent
-        After=teamcity-server.service coreos-metadata.service
-        Requires=teamcity-server.service coreos-metadata.service
+        After=teamcity-server.service coreos-metadata.service teamcity-update.service
+        Requires=teamcity-server.service coreos-metadata.service teamcity-update.service
 
         [Service]
-        EnvironmentFile=/etc/teamcity-version
+        EnvironmentFile=/etc/teamcity/version
         TimeoutStartSec=1200s
         EnvironmentFile=/run/metadata/coreos
         ExecStartPre=/bin/sh -c "docker images --filter 'before=jetbrains/teamcity-agent:${TEAMCITY_VERSION}' --format '{{.ID}} {{.Repository}}' | grep 'jetbrains/teamcity-agent' | grep -Eo '^[^ ]+' | xargs -r docker rmi"
