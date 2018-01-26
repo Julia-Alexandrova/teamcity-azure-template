@@ -10,7 +10,7 @@ if (!(Test-Path $cloudConfigFile)) {
 $replacementTokens = @{
     '\u0027' = "'";
     '\u003e' = '>';
-    "%TeamCityVersion%" = "',parameters('teamcityVersion'),'";
+    "%TeamCityVersion%" = "',toLower(trim(parameters('teamcityVersion'))),'";
     "%RDSHost%" = "',variables('dbServerName'),'";
     "%RDSPassword%" = "',parameters('databasePassword'),'";
     "%RDSDataBase%" = "',variables('dbName'),'";
