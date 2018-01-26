@@ -45,7 +45,7 @@ coreos:
         RemainAfterExit=yes
         ExecStart=/usr/bin/mkdir -p /mnt/data
         ExecStart=/opt/bin/mount.cifs //%StorageAccount%.file.core.windows.net/%FileShare% /mnt/data \
-          -o vers=2.1,user=%StorageAccount%,pass=%StorageKey%,dir_mode=0777,file_mode=0777,sec=ntlmssp
+          -o vers=3.0,user=%StorageAccount%,pass=%StorageKey%,dir_mode=0777,file_mode=0777,sec=ntlmssp
 
         [Install]
         RequiredBy=teamcity-server.service
