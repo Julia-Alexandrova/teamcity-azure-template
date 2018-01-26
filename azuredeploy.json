@@ -2,14 +2,6 @@
   "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
   "parameters": {
-    "environmentName": {
-      "type": "string",
-      "defaultValue": "test",
-      "minLength": 1,
-      "metadata": {
-        "description": "The name of TeamCity environment"
-      }
-    },
     "teamcityVersion": {
       "type": "string",
       "defaultValue": "latest",
@@ -108,19 +100,18 @@
     }
   },
   "variables": {
-    "resourceSuffix": "[toLower(trim(parameters('environmentName')))]",
-    "publicIpName": "[concat('teamcity-', variables('resourceSuffix'), '-pip')]",
-    "publicIpDns": "[concat('teamcity-', uniqueString(resourceGroup().id, variables('resourceSuffix')))]",
-    "virtualNetworkName": "[concat('teamcity-', variables('resourceSuffix'), '-vnet')]",
-    "networkName": "[concat('teamcity-', variables('resourceSuffix'), '-net')]",
+    "publicIpName": "teamcity-pip",
+    "publicIpDns": "[concat('teamcity-', uniqueString(resourceGroup().id))]",
+    "virtualNetworkName": "teamcity-vnet",
+    "networkName": "teamcity-net",
     "networkSubnet": "[concat(resourceId('Microsoft.Network/virtualNetworks', variables('virtualNetworkName')), '/subnets/default')]",
-    "networkSecurityGroupName": "[concat('teamcity-', variables('resourceSuffix'), '-nsg')]",
-    "vmName": "[concat('teamcity-', variables('resourceSuffix'))]",
+    "networkSecurityGroupName": "teamcity-nsg",
+    "vmName": "teamcity",
     "sshKeyPath": "[concat('/home/',parameters('VMAdminUsername'),'/.ssh/authorized_keys')]",
-    "dbServerName": "[concat('teamcity-', variables('resourceSuffix'), '-', uniqueString(resourceGroup().id, variables('resourceSuffix')))]",
+    "dbServerName": "[concat('teamcity-', uniqueString(resourceGroup().id))]",
     "dbName": "teamcitydb",
     "storageAccountName": "[concat('teamcity', uniqueString(resourceGroup().id))]",
-    "storageFileShare": "[concat('teamcity-', variables('resourceSuffix'))]"
+    "storageFileShare": "teamcity"
   },
   "resources": [
     {
