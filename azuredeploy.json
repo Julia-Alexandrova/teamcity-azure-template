@@ -61,17 +61,15 @@
         "description": "Public key for SSH authentication"
       }
     },
-    "databaseSkuName": {
+    "databaseTier": {
       "type": "string",
       "allowedValues": [
-        "MYSQLB50",
-        "MYSQLB100",
-        "MYSQLS100",
-        "MYSQLS200"
+        "Basic",
+        "Standard"
       ],
-      "defaultValue": "MYSQLB50",
+      "defaultValue": "Basic",
       "metadata": {
-        "description": "Azure database for MySQL sku name: MySQL Basic 50/100 DTU or Standard 100/200 DTU"
+        "description": "Azure database for MySQL pricing tier"
       }
     },
     "databaseDTU": {
@@ -79,18 +77,19 @@
       "allowedValues": [
         50,
         100,
-        200
+        200,
+        400
       ],
       "defaultValue": 50,
       "metadata": {
-        "description": "Azure database for MySQL pricing tier"
+        "description": "Azure database for MySQL performance: Basic 50/100 DTU or Standard 100/200/400 DTU"
       }
     },
     "databaseSizeMB": {
       "type": "int",
       "allowedValues": [
         51200,
-        102400
+        179200
       ],
       "defaultValue": 51200,
       "metadata": {
@@ -234,8 +233,8 @@
         "sslEnforcement": "Disabled"
       },
       "sku": {
-        "name": "[parameters('databaseSkuName')]",
-        "tier": "Basic",
+        "name": "[cancat('MYSQL', substring(parameters('databaseTier'), 0, 1), parameters('databaseDTU'))]",
+        "tier": "[parameters('databaseTier')]",
         "capacity": "[parameters('databaseDTU')]",
         "size": "[parameters('databaseSizeMB')]",
         "family": "SkuFamily"
