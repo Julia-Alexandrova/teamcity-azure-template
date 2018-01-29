@@ -12,32 +12,43 @@
     },
     "VMSize": {
       "type": "string",
-      "defaultValue": "Standard_A2_v2",
+      "defaultValue": "Standard_D2s_v3",
       "allowedValues": [
-        "Standard_A1",
-        "Standard_A2",
-        "Standard_A3",
-        "Standard_A4",
         "Standard_A1_v2",
         "Standard_A2_v2",
         "Standard_A4_v2",
         "Standard_A8_v2",
-        "Standard_D1",
-        "Standard_D2",
-        "Standard_D3",
-        "Standard_D4",
+        "Standard_D2s_v3",
+        "Standard_D4s_v3",
+        "Standard_D8s_v3",
         "Standard_D1_v2",
         "Standard_D2_v2",
         "Standard_D3_v2",
         "Standard_D2_v3",
         "Standard_D4_v3",
+        "Standard_DS1_v2",
+        "Standard_DS2_v2",
+        "Standard_DS3_v2",
+        "Standard_E2s_v3",
+        "Standard_E4s_v3",
+        "Standard_E8s_v3",
         "Standard_F1",
         "Standard_F2",
         "Standard_F4",
-        "Standard_F8"
+        "Standard_F8",
+        "Standard_F2s_v2",
+        "Standard_F4s_v2",
+        "Standard_F8s_v2"
       ],
       "metadata": {
         "description": "Instance size for the TeamCity VM"
+      }
+    },
+    "VMDataDiskInGB": {
+      "type": "int",
+      "defaultValue": 33,
+      "metadata": {
+        "description": "Size of attached data disk in GB"
       }
     },
     "VMAdminUsername": {
@@ -107,11 +118,10 @@
     "networkSubnet": "[concat(resourceId('Microsoft.Network/virtualNetworks', variables('virtualNetworkName')), '/subnets/default')]",
     "networkSecurityGroupName": "teamcity-nsg",
     "vmName": "teamcity",
+    "storageType": "[if(contains(toLower(substring(parameters('VMSize'), 9)), 's'), 'Premium_LRS', 'Standard_LRS')]",
     "sshKeyPath": "[concat('/home/',parameters('VMAdminUsername'),'/.ssh/authorized_keys')]",
     "dbServerName": "[concat('teamcity-', uniqueString(resourceGroup().id))]",
-    "dbName": "teamcitydb",
-    "storageAccountName": "[concat('teamcity', uniqueString(resourceGroup().id))]",
-    "storageFileShare": "teamcity"
+    "dbName": "teamcitydb"
   },
   "resources": [
     {
@@ -261,36 +271,10 @@
       ]
     },
     {
-      "type": "Microsoft.Storage/storageAccounts",
-      "sku": {
-        "name": "Standard_LRS"
-      },
-      "kind": "StorageV2",
-      "name": "[variables('storageAccountName')]",
-      "apiVersion": "2017-10-01",
-      "location": "[resourceGroup().location]",
-      "properties": {
-        "supportsHttpsTrafficOnly": "false",
-        "accessTier": "Hot",
-        "encryption": {
-          "services": {
-            "blob": {
-              "enabled": true
-            },
-            "file": {
-              "enabled": true
-            }
-          },
-          "keySource": "Microsoft.Storage"
-        }
-      }
-    },
-    {
       "type": "Microsoft.Compute/virtualMachines",
       "name": "[variables('vmName')]",
       "location": "[resourceGroup().location]",
       "dependsOn": [
-        "[concat('Microsoft.Storage/storageAccounts/', variables('storageAccountName'))]",
         "[concat('Microsoft.Network/networkInterfaces/', variables('networkName'))]"
       ],
       "apiVersion": "2016-04-30-preview",
@@ -301,7 +285,7 @@
         "osProfile": {
           "computerName": "[variables('vmName')]",
           "adminUsername": "[parameters('VMAdminUsername')]",
-          "customData": "[base64(concat('#cloud-config\nwrite_files:\n  - path: \"/etc/teamcity/update.sh\"\n    permissions: 0755\n    content: |\n      #!/bin/bash\n      while true\n      do\n        STATUS=$(curl -s -o /etc/teamcity/tags -w ''%{http_code}'' -H Metadata:true \"http://169.254.169.254/metadata/instance/compute/tags?api-version=2017-08-01\u0026format=text\")\n        if [ $STATUS -eq 200 ]; then\n          VERSION=$(cat /etc/teamcity/tags | sed -n ''s/.*teamcity-version\\:\\([^;]\\+\\).*/\\1/p'')\n          if [[ ! -z \"$VERSION\" ]]; then\n            TEAMCITY_VERSION=\"TEAMCITY_VERSION=$VERSION\"\n            CURRENT_VERSION=$(cat /etc/teamcity/version)\n            if [ \"$TEAMCITY_VERSION\" != \"$CURRENT_VERSION\" ]; then\n                echo \"TeamCity version has changed to $VERSION\"\n                echo \"$TEAMCITY_VERSION\" > /etc/teamcity/version\n                systemctl restart teamcity-server.service\n                systemctl restart teamcity-agent.service\n            fi\n          fi\n        fi\n        sleep 60\n      done\n  - path: \"/etc/coreos/update.conf\"\n    content: |\n      REBOOT_STRATEGY=\"off\"\ncoreos:\n  units:\n    - name: \"install-cifs.service\"\n      enable: true\n      content: |\n        [Unit]\n        Description=Download basic mount.cifs binary\n        After=docker.service network.target\n        Requires=docker.service\n        Before=teamcity-server.service mnt-data.service\n        ConditionFileIsExecutable=!/opt/bin/mount.cifs\n\n        [Service]\n        Type=oneshot\n        TimeoutStartSec=0\n        ExecStart=/usr/bin/mkdir -p /opt/bin\n        ExecStart=/usr/bin/docker run --rm -v /opt/bin:/target so0k/mount.cifs_copy:6.4 /target\n        ExecStart=/usr/bin/docker run --rm microsoft/azure-cli az storage share create -n ',variables('storageFileShare'),' \\\n          --account-name ',variables('storageAccountName'),' --account-key ',listKeys(variables('storageAccountName'), '2017-10-01').keys[0].value,'\n        ExecStart=/usr/bin/docker rmi so0k/mount.cifs_copy:6.4\n        ExecStart=/usr/bin/docker rmi microsoft/azure-cli\n\n        [Install]\n        WantedBy=multi-user.target\n    - name: \"mnt-data.service\"\n      enable: true\n      content: |\n        [Unit]\n        Before=teamcity-server.service\n        After=install-cifs.service\n        Requires=network-online.target install-cifs.service\n        Conflicts=umount.target\n\n        [Service]\n        Type=oneshot\n        TimeoutStartSec=0\n        RemainAfterExit=yes\n        ExecStart=/usr/bin/mkdir -p /mnt/data\n        ExecStart=/opt/bin/mount.cifs //',variables('storageAccountName'),'.file.core.windows.net/',variables('storageFileShare'),' /mnt/data \\\n          -o vers=3.0,user=',variables('storageAccountName'),',pass=',listKeys(variables('storageAccountName'), '2017-10-01').keys[0].value,',dir_mode=0777,file_mode=0777,sec=ntlmssp\n\n        [Install]\n        RequiredBy=teamcity-server.service\n    - name: \"get-mysql-connector.service\"\n      enable: true\n      content: |\n        [Unit]\n        Before=teamcity-server.service\n        After=mnt-data.service\n        Requires=mnt-data.service\n        ConditionPathExists=!/mnt/data/teamcity/lib/jdbc/mysql-connector-java-bin.jar\n\n        [Service]\n        Type=oneshot\n        ExecStart=/usr/bin/mkdir -p /mnt/data/teamcity/lib/jdbc\n        ExecStart=/usr/bin/wget -O /mnt/data/teamcity/lib/jdbc/mysql-connector-java-bin.jar \\\n          http://central.maven.org/maven2/mysql/mysql-connector-java/5.1.43/mysql-connector-java-5.1.43.jar\n\n        [Install]\n        WantedBy=multi-user.target\n    - name: \"prepare-db-properties.service\"\n      enable: true\n      content: |\n        [Unit]\n        Before=teamcity-server.service\n        After=mnt-data.service\n        Requires=mnt-data.service network-online.target\n        ConditionPathExists=!/mnt/data/teamcity/config/database.properties\n\n        [Service]\n        Type=oneshot\n        ExecStart=/usr/bin/mkdir -p /mnt/data/teamcity/config\n        ExecStart=/bin/bash -c ''echo connectionProperties.user=teamcity@',variables('dbServerName'),' > /mnt/data/teamcity/config/database.properties''\n        ExecStart=/bin/bash -c ''echo connectionProperties.password=',parameters('databasePassword'),' >> /mnt/data/teamcity/config/database.properties''\n        ExecStart=/bin/bash -c ''echo connectionUrl=jdbc\\\\:mysql\\\\://',variables('dbServerName'),'.mysql.database.azure.com/',variables('dbName'),'?autoReconnect=true >> /mnt/data/teamcity/config/database.properties''\n\n        [Install]\n        WantedBy=multi-user.target\n    - name: \"teamcity-update.service\"\n      command: \"start\"\n      content: |\n        [Unit]\n        Before=teamcity-server.service teamcity-agent.service\n        Requires=network-online.target\n\n        [Service]\n        ExecStart=+/bin/sh /etc/teamcity/update.sh\n        Restart=always\n\n        [Install]\n        WantedBy=multi-user.target\n    - name: \"teamcity-server.service\"\n      command: \"start\"\n      content: |\n        [Unit]\n        Description=TeamCity Server\n        After=docker.service mnt-data.service get-mysql-connector.service prepare-db-properties.service teamcity-update.service\n        Requires=docker.service mnt-data.service get-mysql-connector.service prepare-db-properties.service teamcity-update.service\n\n        [Service]\n        EnvironmentFile=/etc/teamcity/version\n        TimeoutStartSec=1200s\n        ExecStartPre=/bin/sh -c \"docker images --filter ''before=jetbrains/teamcity-server:${TEAMCITY_VERSION}'' --format ''{{.ID}} {{.Repository}}'' | grep ''jetbrains/teamcity-server'' | grep -Eo ''^[^ ]+'' | xargs -r docker rmi\"\n        ExecStart=/usr/bin/docker run \\\n          -v /mnt/data/teamcity:/data/teamcity_server/datadir \\\n          -v /mnt/data/logs/teamcity:/opt/teamcity/logs \\\n          -v /mnt/data/temp/teamcity:/opt/teamcity/temp \\\n          -p 80:8111 \\\n          --name teamcity-server \\\n          jetbrains/teamcity-server:${TEAMCITY_VERSION}\n        ExecStop=-/usr/bin/docker exec teamcity-server /opt/teamcity/bin/teamcity-server.sh stop 60\n        ExecStopPost=-/usr/bin/docker stop teamcity-server\n        ExecStopPost=-/usr/bin/docker rm teamcity-server\n        Restart=always\n\n        [Install]\n        WantedBy=multi-user.target\n    - name: \"teamcity-agent.service\"\n      command: \"start\"\n      content: |\n        [Unit]\n        Description=TeamCity Agent\n        After=teamcity-server.service coreos-metadata.service teamcity-update.service\n        Requires=teamcity-server.service coreos-metadata.service teamcity-update.service\n\n        [Service]\n        EnvironmentFile=/etc/teamcity/version\n        TimeoutStartSec=1200s\n        EnvironmentFile=/run/metadata/coreos\n        ExecStartPre=/bin/sh -c \"docker images --filter ''before=jetbrains/teamcity-agent:${TEAMCITY_VERSION}'' --format ''{{.ID}} {{.Repository}}'' | grep ''jetbrains/teamcity-agent'' | grep -Eo ''^[^ ]+'' | xargs -r docker rmi\"\n        ExecStart=/usr/bin/docker run \\\n          -v /mnt/data/temp/teamcity:/opt/teamcity/temp \\\n          -e SERVER_URL=${COREOS_AZURE_IPV4_DYNAMIC} \\\n          -e AGENT_NAME=Default \\\n          --name teamcity-agent \\\n          jetbrains/teamcity-agent:${TEAMCITY_VERSION}\n        ExecStop=-/usr/bin/docker stop teamcity-agent\n        ExecStopPost=-/usr/bin/docker rm teamcity-agent\n        Restart=always\n\n        [Install]\n        WantedBy=multi-user.target'))]",
+          "customData": "[base64(concat('#cloud-config\nwrite_files:\n  - path: \"/etc/teamcity/update.sh\"\n    permissions: 0755\n    content: |\n      #!/bin/bash\n      while true\n      do\n        STATUS=$(curl -s -o /etc/teamcity/tags -w ''%{http_code}'' -H Metadata:true \"http://169.254.169.254/metadata/instance/compute/tags?api-version=2017-08-01\u0026format=text\")\n        if [ $STATUS -eq 200 ]; then\n          VERSION=$(cat /etc/teamcity/tags | sed -n ''s/.*teamcity-version\\:\\([^;]\\+\\).*/\\1/p'')\n          if [[ ! -z \"$VERSION\" ]]; then\n            TEAMCITY_VERSION=\"TEAMCITY_VERSION=$VERSION\"\n            CURRENT_VERSION=$(cat /etc/teamcity/version)\n            if [ \"$TEAMCITY_VERSION\" != \"$CURRENT_VERSION\" ]; then\n                echo \"TeamCity version has changed to $VERSION\"\n                echo \"$TEAMCITY_VERSION\" > /etc/teamcity/version\n                /usr/bin/docker pull jetbrains/teamcity-server:${VERSION}\n                systemctl restart teamcity-server.service\n                /usr/bin/docker pull jetbrains/teamcity-agent:${VERSION}\n                systemctl restart teamcity-agent.service\n            fi\n          fi\n        fi\n        sleep 60\n      done\n  - path: \"/etc/coreos/update.conf\"\n    content: |\n      REBOOT_STRATEGY=\"off\"\ncoreos:\n  units:\n    - name: \"format-mnt-data.service\"\n      enable: true\n      content: |\n        [Unit]\n        Requires=network-online.target\n        Before=teamcity-server.service mnt-data.mount\n        ConditionPathExists=!/dev/mapper/app-data\n\n        [Service]\n        Type=oneshot\n        ExecStart=/bin/bash -c \\\n          ''/usr/sbin/pvcreate /dev/sdc \u0026\u0026 \\\n          /usr/sbin/vgcreate app /dev/sdc \u0026\u0026 \\\n          /usr/sbin/lvcreate -l 100%FREE -n data app \u0026\u0026 \\\n          /usr/sbin/mkfs.ext4 /dev/mapper/app-data''\n\n        [Install]\n        WantedBy=multi-user.target\n    - name: \"mnt-data.mount\"\n      enable: true\n      content: |\n        [Unit]\n        Before=teamcity-server.service\n        After=format-mnt-data.service\n        Requires=format-mnt-data.service\n        ConditionVirtualization=!container\n        Conflicts=umount.target\n        [Mount]\n        What=/dev/mapper/app-data\n        Where=/mnt/data\n        Type=ext4\n        Options=\n        [Install]\n        RequiredBy=teamcity-server.service\n    - name: \"get-mysql-connector.service\"\n      enable: true\n      content: |\n        [Unit]\n        Before=teamcity-server.service\n        After=mnt-data.mount\n        Requires=mnt-data.mount\n        ConditionPathExists=!/mnt/data/teamcity/lib/jdbc/mysql-connector-java-bin.jar\n\n        [Service]\n        Type=oneshot\n        ExecStart=/usr/bin/mkdir -p /mnt/data/teamcity/lib/jdbc\n        ExecStart=/usr/bin/wget -O /mnt/data/teamcity/lib/jdbc/mysql-connector-java-bin.jar \\\n          http://central.maven.org/maven2/mysql/mysql-connector-java/5.1.43/mysql-connector-java-5.1.43.jar\n\n        [Install]\n        WantedBy=multi-user.target\n    - name: \"prepare-db-properties.service\"\n      enable: true\n      content: |\n        [Unit]\n        Before=teamcity-server.service\n        After=mnt-data.mount\n        Requires=mnt-data.mount network-online.target\n        ConditionPathExists=!/mnt/data/teamcity/config/database.properties\n\n        [Service]\n        Type=oneshot\n        ExecStart=/usr/bin/mkdir -p /mnt/data/teamcity/config\n        ExecStart=/bin/bash -c ''echo connectionProperties.user=teamcity@',variables('dbServerName'),' > /mnt/data/teamcity/config/database.properties''\n        ExecStart=/bin/bash -c ''echo connectionProperties.password=',parameters('databasePassword'),' >> /mnt/data/teamcity/config/database.properties''\n        ExecStart=/bin/bash -c ''echo connectionUrl=jdbc\\\\:mysql\\\\://',variables('dbServerName'),'.mysql.database.azure.com/',variables('dbName'),'?autoReconnect=true >> /mnt/data/teamcity/config/database.properties''\n\n        [Install]\n        WantedBy=multi-user.target\n    - name: \"teamcity-update.service\"\n      command: \"start\"\n      content: |\n        [Unit]\n        After=docker.service\n        Before=teamcity-server.service teamcity-agent.service\n        Requires=docker.service network-online.target\n\n        [Service]\n        ExecStart=+/bin/sh /etc/teamcity/update.sh\n        Restart=always\n\n        [Install]\n        WantedBy=multi-user.target\n    - name: \"teamcity-server.service\"\n      command: \"start\"\n      content: |\n        [Unit]\n        Description=TeamCity Server\n        After=docker.service mnt-data.mount get-mysql-connector.service prepare-db-properties.service teamcity-update.service\n        Requires=docker.service mnt-data.mount get-mysql-connector.service prepare-db-properties.service teamcity-update.service\n\n        [Service]\n        EnvironmentFile=/etc/teamcity/version\n        TimeoutStartSec=1200s\n        ExecStartPre=/bin/sh -c \"docker images --filter ''before=jetbrains/teamcity-server:${TEAMCITY_VERSION}'' --format ''{{.ID}} {{.Repository}}'' | grep ''jetbrains/teamcity-server'' | grep -Eo ''^[^ ]+'' | xargs -r docker rmi\"\n        ExecStart=/usr/bin/docker run \\\n          -v /mnt/data/teamcity:/data/teamcity_server/datadir \\\n          -v /mnt/data/logs/teamcity:/opt/teamcity/logs \\\n          -v /mnt/data/temp/teamcity:/opt/teamcity/temp \\\n          -p 80:8111 \\\n          --name teamcity-server \\\n          jetbrains/teamcity-server:${TEAMCITY_VERSION}\n        ExecStop=-/usr/bin/docker exec teamcity-server /opt/teamcity/bin/teamcity-server.sh stop 60\n        ExecStopPost=-/usr/bin/docker stop teamcity-server\n        ExecStopPost=-/usr/bin/docker rm teamcity-server\n        Restart=always\n\n        [Install]\n        WantedBy=multi-user.target\n    - name: \"teamcity-agent.service\"\n      command: \"start\"\n      content: |\n        [Unit]\n        Description=TeamCity Agent\n        After=teamcity-server.service coreos-metadata.service teamcity-update.service\n        Requires=teamcity-server.service coreos-metadata.service teamcity-update.service\n\n        [Service]\n        EnvironmentFile=/etc/teamcity/version\n        TimeoutStartSec=1200s\n        EnvironmentFile=/run/metadata/coreos\n        ExecStartPre=/bin/sh -c \"docker images --filter ''before=jetbrains/teamcity-agent:${TEAMCITY_VERSION}'' --format ''{{.ID}} {{.Repository}}'' | grep ''jetbrains/teamcity-agent'' | grep -Eo ''^[^ ]+'' | xargs -r docker rmi\"\n        ExecStart=/usr/bin/docker run \\\n          -v /mnt/data/temp/teamcity:/opt/teamcity/temp \\\n          -e SERVER_URL=${COREOS_AZURE_IPV4_DYNAMIC} \\\n          -e AGENT_NAME=Default \\\n          --name teamcity-agent \\\n          jetbrains/teamcity-agent:${TEAMCITY_VERSION}\n        ExecStop=-/usr/bin/docker stop teamcity-agent\n        ExecStopPost=-/usr/bin/docker rm teamcity-agent\n        Restart=always\n\n        [Install]\n        WantedBy=multi-user.target'))]",
           "linuxConfiguration": {
             "disablePasswordAuthentication": true,
             "ssh": {
@@ -323,12 +307,24 @@
           },
           "osDisk": {
             "name": "[concat(variables('vmName'), '-os')]",
-            "vhd": {
-              "uri": "[concat('https://', variables('storageAccountName'), '.blob.core.windows.net/vhds/', variables('vmName'), '-os.vhd')]"
-            },
             "caching": "ReadWrite",
-            "createOption": "FromImage"
-          }
+            "createOption": "FromImage",
+            "managedDisk": {
+              "storageAccountType": "[variables('storageType')]"
+            }
+          },
+          "dataDisks": [
+            {
+              "name": "[concat(variables('vmName'), '-data')]",
+              "caching": "ReadWrite",
+              "createOption": "Empty",
+              "diskSizeGB": "[parameters('VMDataDiskInGB')]",
+              "lun": 0,
+              "managedDisk": {
+                "storageAccountType": "[variables('storageType')]"
+              }
+            }
+          ]
         },
         "networkProfile": {
           "networkInterfaces": [
