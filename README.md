@@ -1,6 +1,6 @@
 # TeamCity Azure Resource Manager Template
 
-[![official project](http://jb.gg/badges/official.svg)](https://confluence.jetbrains.com/display/ALL/JetBrains+on+GitHub)
+[![official project](http://jb.gg/badges/incubator.svg)](https://confluence.jetbrains.com/display/ALL/JetBrains+on+GitHub)
 
 The template which allows to deploy TeamCity [server](https://hub.docker.com/r/jetbrains/teamcity-server/) and [agent](https://hub.docker.com/r/jetbrains/teamcity-agent/) from in Azure cloud. It allocates MySQL database and virtual machine with CoreOS and starts in it containers from official TeamCity docker images.
 
